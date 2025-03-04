@@ -207,7 +207,7 @@ namespace notificationapi.Controllers
                         // Simpan ke cache dengan TTL 3 detik
                         var cacheOptions = new MemoryCacheEntryOptions
                         {
-                            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(10)
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(3)
                         };
                         memoryCache.Set($"notifications_{userLoginId}", allNotifications, cacheOptions);
                     }
@@ -223,7 +223,7 @@ namespace notificationapi.Controllers
                         await writer.FlushAsync();
                     }
 
-                    await Task.Delay(10000); // Cek update setiap 3 detik
+                    await Task.Delay(3000); // Cek update setiap 3 detik
                 }
             }
             catch (Exception ex)
