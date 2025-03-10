@@ -135,57 +135,13 @@ namespace notificationapi.Controllers
         }
 
 
-        // [HttpGet("stream/{userLoginId}")]
-        // public async Task StreamNotifications(string userLoginId)
-        // {
-        //     Response.Headers.Append("Content-Type", "text/event-stream");
-        //     Response.Headers.Append("Cache-Control", "no-cache");
-        //     Response.Headers.Append("Connection", "keep-alive");
-
-        //     var clientStream = Response.BodyWriter.AsStream();
-        //     var writer = new StreamWriter(clientStream) { AutoFlush = true };
-
-        //     lock (_clients)
-        //     {
-        //         _clients.Add(writer);
-        //     }
-
-        //     try
-        //     {
-        //         while (!HttpContext.RequestAborted.IsCancellationRequested)
-        //         {
-        //             var allNotifications = await _notificationRepository.GetAllNotificationsAsync(userLoginId);
-
-        //             if (allNotifications.Any()) // Kirim hanya jika ada data
-        //             {
-        //                 var jsonData = System.Text.Json.JsonSerializer.Serialize(allNotifications);
-        //                 await writer.WriteLineAsync($"data: {jsonData}\n");
-        //                 await writer.FlushAsync();
-        //             }
-
-        //             await Task.Delay(3000); // Cek update setiap 3 detik
-        //         }
-        //     }
-        //     catch (Exception ex)
-        //     {
-        //         Console.WriteLine($"[SSE] Error: {ex.Message}");
-        //     }
-        //     finally
-        //     {
-        //         lock (_clients)
-        //         {
-        //             _clients.Remove(writer);
-        //         }
-        //     }
-        // }
-
-
         [HttpGet("stream/{userLoginId}")]
-        public async Task StreamNotifications(string userLoginId, [FromServices] IMemoryCache memoryCache)
+        public async Task StreamNotifications(string userLoginId)
         {
             Response.Headers.Append("Content-Type", "text/event-stream");
             Response.Headers.Append("Cache-Control", "no-cache");
-            Response.Headers.Append("Connection", "keep-alive");
+            // Hapus header Connection yang tidak valid untuk HTTP/2 dan HTTP/3
+            // Response.Headers.Append("Connection", "keep-alive");
 
             var clientStream = Response.BodyWriter.AsStream();
             var writer = new StreamWriter(clientStream) { AutoFlush = true };
@@ -197,33 +153,26 @@ namespace notificationapi.Controllers
 
             try
             {
+                string lastDataHash = string.Empty;
+
                 while (!HttpContext.RequestAborted.IsCancellationRequested)
                 {
-                    // Cek di cache dulu sebelum query ke database
-                    if (!memoryCache.TryGetValue($"notifications_{userLoginId}", out List<ViewNotification>? allNotifications))
-                    {
-                        allNotifications = await _notificationRepository.GetAllNotificationsAsync(userLoginId) ?? new List<ViewNotification>();
+                    // Mengambil data langsung dari database
+                    var currentNotifications = await _notificationRepository.GetAllNotificationsAsync(userLoginId) ?? new List<ViewNotification>();
 
-                        // Simpan ke cache dengan TTL 3 detik
-                        var cacheOptions = new MemoryCacheEntryOptions
-                        {
-                            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(3)
-                        };
-                        memoryCache.Set($"notifications_{userLoginId}", allNotifications, cacheOptions);
-                    }
-                    else
-                    {
-                        allNotifications ??= new List<ViewNotification>(); // Pastikan tidak null jika cache kosong
-                    }
+                    // Serialize data dan buat hash untuk perbandingan efisien
+                    var jsonData = System.Text.Json.JsonSerializer.Serialize(currentNotifications);
+                    var currentHash = ComputeHash(jsonData);
 
-                    if (allNotifications.Any())
+                    // Hanya kirim jika data berubah (hash berbeda)
+                    if (currentHash != lastDataHash)
                     {
-                        var jsonData = System.Text.Json.JsonSerializer.Serialize(allNotifications);
                         await writer.WriteLineAsync($"data: {jsonData}\n");
                         await writer.FlushAsync();
+                        lastDataHash = currentHash;
                     }
 
-                    await Task.Delay(3000); // Cek update setiap 3 detik
+                    await Task.Delay(5000);
                 }
             }
             catch (Exception ex)
@@ -239,8 +188,69 @@ namespace notificationapi.Controllers
             }
         }
 
+        [HttpGet("streamunread/{userLoginId}")]
+        public async Task StreamNotificationsUnread(string userLoginId)
+        {
+            Response.Headers.Append("Content-Type", "text/event-stream");
+            Response.Headers.Append("Cache-Control", "no-cache");
+            // Hapus header Connection yang tidak valid untuk HTTP/2 dan HTTP/3
+            // Response.Headers.Append("Connection", "keep-alive");
 
+            var clientStream = Response.BodyWriter.AsStream();
+            var writer = new StreamWriter(clientStream) { AutoFlush = true };
 
+            lock (_clients)
+            {
+                _clients.Add(writer);
+            }
+
+            try
+            {
+                string lastDataHash = string.Empty;
+
+                while (!HttpContext.RequestAborted.IsCancellationRequested)
+                {
+                    // Mengambil data langsung dari database
+                    var unreadNotifications = await _notificationRepository.GetUnreadNotificationsAsync(userLoginId) ?? new List<ViewNotification>();
+
+                    // Serialize data dan buat hash untuk perbandingan efisien
+                    var jsonData = System.Text.Json.JsonSerializer.Serialize(unreadNotifications);
+                    var currentHash = ComputeHash(jsonData);
+
+                    // Hanya kirim jika data berubah (hash berbeda)
+                    if (currentHash != lastDataHash)
+                    {
+                        await writer.WriteLineAsync($"data: {jsonData}\n");
+                        await writer.FlushAsync();
+                        lastDataHash = currentHash;
+                    }
+
+                    await Task.Delay(5000);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SSE] Error: {ex.Message}");
+            }
+            finally
+            {
+                lock (_clients)
+                {
+                    _clients.Remove(writer);
+                }
+            }
+        }
+
+        // Helper method untuk menghitung hash dari string
+        private string ComputeHash(string input)
+        {
+            using (var sha256 = System.Security.Cryptography.SHA256.Create())
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(input);
+                var hash = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hash);
+            }
+        }
 
 
         [HttpPut]
@@ -331,7 +341,13 @@ namespace notificationapi.Controllers
                 });
             }
 
+
         }
+
+
+
+
+       
 
     }
 }
